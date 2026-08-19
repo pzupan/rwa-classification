@@ -1,0 +1,37 @@
+{
+  "name": "rwa-classification",
+  "version": "0.1.0",
+  "description": "Reference implementation of the RWA asset classification and data discovery sRFC for Solana",
+  "type": "module",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pzupan/rwa-classification.git"
+  },
+  "exports": {
+    ".": "./src/rwa-classification.ts"
+  },
+  "files": [
+    "src/rwa-classification.ts",
+    "SPEC.md"
+  ],
+  "keywords": [
+    "solana",
+    "rwa",
+    "srfc",
+    "attestation",
+    "token-2022",
+    "sas"
+  ],
+  "scripts": {
+    "test": "node --test 'src/**/*.test.ts'",
+    "typecheck": "tsc --noEmit",
+    "sas:devnet": "node scripts/sas-devnet.mjs",
+    "post": "node scripts/build-post.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "sas-lib": "^1.0.10",
+    "typescript": "~6.0.3"
+  }
+}
