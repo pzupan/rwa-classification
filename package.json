@@ -24,7 +24,7 @@
     "sas"
   ],
   "scripts": {
-    "test": "node --test 'src/**/*.test.ts'",
+    "test": "node --test 'src/**/*.test.ts' 'scripts/**/*.test.mjs'",
     "typecheck": "tsc --noEmit",
     "sas:devnet": "node scripts/sas-devnet.mjs",
     "post": "node scripts/build-post.mjs"
