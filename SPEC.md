@@ -290,6 +290,49 @@ Which attesters a consumer honours is consumer policy, and any list SHOULD be
 independently forkable. A specification that appoints its own authors as the
 trust root would not deserve adoption.
 
+### 3.8 Issuer standing — `rwa.issuer.v1` (draft)
+
+A platform that tokenizes for many issuers typically classifies each issuer's
+mints under a **per-issuer classification credential**. Trusting each of those
+directly does not scale, and trusting the platform's one credential cannot
+withdraw a single issuer. An issuer-standing attestation lets any third party —
+a KYB provider, transfer agent, auditor, or the platform itself — vouch for one
+classification credential, and withdraw that one alone by closing it (§3.4).
+
+Registered by any attester under its own credential:
+
+| Name | Version | Nonce |
+|---|---|---|
+| `rwa.issuer.v1` | `1` | the classification credential vouched for |
+
+| # | Field | Type code | Type | Notes |
+|---|---|---|---|---|
+| 0 | `classification_credential` | 13 | `Vec<u8>` | 32 bytes; equal to the nonce |
+| 1 | `attester_name` | 12 | `String` | legal name of the party issuing this attestation |
+| 2 | `attester_lei` | 12 | `String` | ISO 17442 LEI of that party, MAY be empty |
+| 3 | `subject_name` | 12 | `String` | legal name of the issuer that owns the credential |
+| 4 | `subject_lei` | 12 | `String` | ISO 17442, MAY be empty |
+| 5 | `subject_jurisdiction` | 12 | `String` | ISO 3166-1/-2, MAY be empty |
+| 6 | `verified_at` | 8 | `i64` | Unix seconds the attester completed its review |
+
+Layout: `[13, 12, 12, 12, 12, 12, 8]`.
+
+**`attester_name` identifies who vouched, so a consumer can say so** ("Verified by
+…"). It is the attester's own statement about itself, and carries weight only
+because the consumer chose to trust the credential it is written under (§3.5):
+the trust decision is keyed on the credential, the name is for display and audit.
+
+**Consumer rule.** A consumer holding a set of trusted *issuer-standing*
+credentials treats a classification credential C as trusted when at least one
+attestation exists with nonce C, under a trusted credential, under an unpaused
+`rwa.issuer.v1` schema of that credential, that has not expired. Several
+attesters MAY vouch for the same C; a consumer SHOULD show each, and one closing
+its attestation leaves the others standing. This extends §3.7, it does not
+replace it: which issuer-standing credentials to honour is itself consumer
+policy, and a consumer MAY still trust classification credentials directly.
+
+Nothing in this schema gates a transfer (§5.3).
+
 ## 4. Layer 3 — data discovery and integrity
 
 Extended property data cannot live on-chain. `rwa.api` points to a **discovery
@@ -326,8 +369,8 @@ the domain.
 {
   "version": "1",
   "mint": "Rv8nDq4pKmT2xLcYbW6sJ9fHgA3eZuN5tQrX7vMkPd1",
-  "issued_at": "2026-08-14T00:00:00Z",
-  "expires_at": "2026-11-14T00:00:00Z",
+  "issuedAt": "2026-08-14T00:00:00Z",
+  "expiresAt": "2026-11-14T00:00:00Z",
   "manifest": "bafkrei...",
   "endpoints": {
     "summary":   "https://api.issuer.example/v1/assets/Rv8n.../summary",
