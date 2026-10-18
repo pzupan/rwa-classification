@@ -250,6 +250,21 @@ Consequently:
 3. `changeSchemaStatus` sets `isPaused` on the whole schema — a kill switch for
    every attestation under it at once. Consumers SHOULD check it, and MUST treat
    a paused schema as no better than unattested.
+4. **Renewal also closes.** Fixing the nonce (§3.3) fixes the address, and SAS
+   will not create over a live account, so re-issuing an attestation means
+   `closeAttestation` followed by `createAttestation` on the same address.
+   Attesters SHOULD put both in one transaction, so the mint never reads as
+   unattested between them. A consumer that indexes `CloseAttestationEvent`
+   MUST NOT treat a close followed in the same transaction by a create at the
+   same address as a revocation; it is a re-issue, and every routine renewal
+   produces one.
+
+Lifetimes are attester policy, not fixed here. As a guide: a classification
+attestation SHOULD NOT exceed 90 days, since the asset facts behind it go stale
+and expiry is the only withdrawal a reader is guaranteed to see. Standing and
+binding attestations (§3.8, §3.9) MAY run longer — a year is typical, matching
+KYB review cycles — because the consumer rules for both require the account to
+exist, so closing one withdraws it as soon as a reader re-reads.
 
 ### 3.5 Attester identity
 
@@ -269,6 +284,16 @@ is permitted and MUST be detectable — consumers compare the credential authori
 and `signer` against the mint's authorities — so it can be surfaced or discounted
 per consumer policy.
 
+That comparison only works while the issuer signs with its own keys. A
+tokenization platform commonly holds the mint authority in custody (an HSM, a
+key-management service, or a multisig vault) while attesting under a
+credential whose authority is a different platform key. The keys then differ
+even though one organisation controls both, and the check passes. Such a
+platform counts as the issuer for the purposes of this section. Consumers
+SHOULD NOT treat differing keys alone as evidence of independence; independent
+verification shows up as a standing attestation (§3.8) from a party other than
+the platform.
+
 ### 3.6 Reference deployment
 
 A working schema exists on devnet, created by `npm run sas:devnet`:
@@ -280,7 +305,9 @@ A working schema exists on devnet, created by `npm run sas:devnet`:
 | Example attestation | `G6qArVxuNwL9aC3EpTY443TfVTfyFmKwQhgmnd6rht9b` |
 
 This is a draft artifact for implementers to read against, not a trust root and
-not a mainnet registration. Adoption-bar item 2 (§8) means a mainnet schema under
+not a mainnet registration. It covers `rwa.classification.v1` only; the
+`rwa.issuer.v1` and `rwa.lei.v1` drafts (§3.8, §3.9) have no reference
+deployment here yet. Adoption-bar item 2 (§9) means a mainnet schema under
 a credential that is not solely the author's.
 
 ### 3.7 Trust sets are not part of this spec
@@ -298,6 +325,21 @@ directly does not scale, and trusting the platform's one credential cannot
 withdraw a single issuer. An issuer-standing attestation lets any third party —
 a KYB provider, transfer agent, auditor, or the platform itself — vouch for one
 classification credential, and withdraw that one alone by closing it (§3.4).
+
+For a platform this is the primary trust path, not an extension: consumers
+cannot enumerate per-issuer credentials (SAS derives each from its authority
+and a name of the platform's choosing) and SHOULD NOT be asked to. They trust a
+handful of standing attesters, and reach each issuer's credential through
+them:
+
+```
+mint ── rwa.classification.v1, under the issuer's credential
+         └── issuer's credential ── rwa.issuer.v1, under each standing attester
+```
+
+A platform SHOULD NOT classify every issuer's mints under one shared
+credential. Withdrawing that credential's standing withdraws every issuer at
+once, and leaving it in place keeps a withdrawn issuer's mints Verified.
 
 Registered by any attester under its own credential:
 
@@ -333,14 +375,76 @@ policy, and a consumer MAY still trust classification credentials directly.
 
 Nothing in this schema gates a transfer (§5.3).
 
+### 3.9 LEI binding — `rwa.lei.v1` (draft)
+
+`issuer_lei` (§3.1) and `subject_lei` (§3.8) are claims about an entity; nothing
+in them says anyone checked. A **LEI binding** is an attester's statement that it
+verified the legal entity holding an ISO 17442 LEI (its own KYB, or a vLEI
+presentation), and optionally which classification credential that entity issues
+under. A platform onboarding an issuer that already has one MAY rely on it in
+place of repeating entity verification, per its own policy.
+
+It does not create or certify an LEI. LEIs are issued by GLEIF-accredited LOUs
+and their status lives at GLEIF; the binding records what GLEIF said when the
+attester checked, and a consumer that cares about the LEI's current status
+SHOULD ask GLEIF (§11).
+
+Registered by any attester under its own credential:
+
+| Name | Version | Nonce |
+|---|---|---|
+| `rwa.lei.v1` | `1` | `sha256("rwa.lei.v1:" ‖ LEI)` — the 20-character LEI, uppercase ASCII |
+
+The nonce is a hash, not a key anyone holds; SAS derives the PDA from any 32
+bytes. Given an LEI and a set of trusted credentials, a consumer derives every
+account to read, with no indexer (as §3.3 does for mints).
+
+| # | Field | Type code | Type | Notes |
+|---|---|---|---|---|
+| 0 | `lei` | 12 | `String` | the LEI; MUST hash to the nonce |
+| 1 | `legal_name` | 12 | `String` | the entity's legal name as GLEIF records it |
+| 2 | `jurisdiction` | 12 | `String` | GLEIF's legal jurisdiction, ISO 3166-1/-2, MAY be empty |
+| 3 | `registration_status` | 12 | `String` | GLEIF `registration.status` at verification, e.g. `ISSUED` |
+| 4 | `classification_credential` | 13 | `Vec<u8>` | 32 bytes, or empty if the entity issues under none yet |
+| 5 | `attester_name` | 12 | `String` | legal name of the party issuing this attestation |
+| 6 | `attester_lei` | 12 | `String` | ISO 17442 LEI of that party, MAY be empty |
+| 7 | `basis` | 12 | `String` | how the entity was verified: `kyb`, `vlei`, or another registered value |
+| 8 | `verified_at` | 8 | `i64` | Unix seconds the attester completed its verification |
+
+Layout: `[12, 12, 12, 12, 13, 12, 12, 12, 8]`.
+
+**Attesters MUST set an expiry** no later than the LEI's GLEIF `nextRenewalDate`
+where that is sooner than the attester's own re-verification period, so a binding
+never outlives the registration it describes. A consumer MUST treat an expiry of
+`0` as expired.
+
+**Consumer rule.** A consumer holding a set of trusted *LEI-binding* credentials
+treats LEI L as verified when an unexpired attestation with nonce
+`sha256("rwa.lei.v1:" ‖ L)` exists under a trusted credential and an unpaused
+`rwa.lei.v1` schema of that credential, and its `lei` field equals L. A consumer
+relying on it for onboarding SHOULD also confirm with GLEIF that L is `ISSUED`,
+that its entity status is `ACTIVE`, and that its legal name matches the entity
+in front of it. An LEI that is in good standing but names someone else is not
+that entity's, whoever attested it. Attesters SHOULD apply the same three
+checks before writing a binding. Which LEI-binding credentials to honour is
+consumer policy (§3.7), and a consumer MUST NOT count its own credential as an
+independent verification of an entity it is onboarding.
+
+Nothing in this schema gates a transfer (§5.3).
+
 ## 4. Layer 3 — data discovery and integrity
 
 Extended property data cannot live on-chain. `rwa.api` points to a **discovery
 document**, not a live data endpoint:
 
 ```
-https://issuer.example/.well-known/rwa.json
+https://issuer.example/.well-known/rwa/<mint>.json
 ```
+
+One document per mint, at a path keyed by the base58 mint address, because the
+document names a single `mint` (§4.2) and the attestation that pins its signer
+is per mint (§3.1). An issuer with many mints serves many documents from one
+host.
 
 Static, cacheable, CORS-enabled, and it names the actual endpoints. This
 indirection matters because updating mint metadata costs an authority action and
@@ -349,7 +453,12 @@ rent, so a URL written directly into a mint will go stale and stay stale.
 ### 4.1 Signing: detached, over raw bytes
 
 The document is served with a detached ed25519 signature at
-`.well-known/rwa.sig`, computed over **the exact bytes of `rwa.json` as served**.
+`.well-known/rwa/<mint>.sig`, computed over **the exact bytes of
+`<mint>.json` as served**.
+
+A consumer MUST check that the document's `mint` equals the mint it is
+assessing, for the same reason §5.1 requires it of attestations: a validly
+signed document for one mint is no evidence about another.
 
 Raw-byte signing is deliberate. Signing a canonicalized JSON structure (JCS or
 otherwise) introduces a canonicalization implementation on both sides and every
@@ -395,6 +504,27 @@ the manifest is unverified and MUST be presented as such.
 
 Live data MUST NOT feed authorization decisions and MUST be displayed with an
 "as of" timestamp.
+
+Endpoint payloads are the issuer's to define. A shape that has worked in
+practice, offered as a non-normative starting point, puts a common envelope on
+every response:
+
+```json
+{
+  "version": "1",
+  "mint": "Rv8nDq4pKmT2xLcYbW6sJ9fHgA3eZuN5tQrX7vMkPd1",
+  "asOf": "2026-10-09T12:00:00Z",
+  "verified": false,
+  "navPerToken": "1.0425",
+  "struckAt": "2026-09-30T00:00:00Z"
+}
+```
+
+`verified: false` states in the payload itself that it carries no integrity of
+its own. Amounts are decimal strings, so no reader parses money through a
+float. A NAV that is struck only at events such as redemptions SHOULD say when
+it was struck rather than present itself as current. What an endpoint may
+expose at all is subject to §8.
 
 ## 5. Consumer requirements (normative)
 
@@ -456,7 +586,107 @@ attack-surface expansion.
   binding; §5.1 makes checking it mandatory.
 - **Enum squatting** — mitigated by the closed `rwa.class` set.
 
-## 8. Governance
+## 8. Securities-law considerations (non-normative)
+
+This section is informational. It does not impose conformance requirements on
+consumers and does not change any Layer 1–3 mechanics. It exists because the
+same discoverability that makes this standard useful — a mint's classification
+being derivable by any observer without an indexer (§3.3) — sits close to a
+line that some issuers are legally required not to cross, and an implementer
+reading only the mechanical sections could wire the discovery layer in a way
+that creates an offering-law problem the spec itself never intended.
+
+Nothing in this document is legal advice. Issuers are responsible for their own
+exemption analysis and should obtain their own counsel's approval before
+publishing conforming metadata for a live offering.
+
+### 8.1 The classification layers are descriptive, not an offer
+
+Layers 1 and 2 describe **what an asset is** and **what claim a holder has on
+it**. They are deliberately incapable of carrying price, availability,
+minimum investment, projected return, valuation, or any term of an offering —
+none of those fields exist in §2 or §3.1, and none should be smuggled into
+`rwa.subclass`, a discovery URL, or an unrecognized `rwa.*` key.
+
+This is a design property with a legal consequence. Under U.S. law, an
+exemption from registration under Regulation D that relies on Rule 506(b)
+requires the issuer to avoid "general solicitation or general advertising"
+(Securities Act Rule 502(c)). The prohibition targets the *offering
+communication* — the pitch, its terms, anything that conditions the public mind
+or arouses interest in the securities — not the mere on-chain existence or
+discoverability of a security. A classification is a description, not a
+conveyance (§Non-goals) and not an offer. Keeping the on-chain layers purely
+classificatory is what keeps discoverability on the descriptive side of that
+line.
+
+The equivalent line is well-worn off-chain: an issuer's public website may
+carry factual business information but not offering terms, projections, or
+performance data, while the offering material itself sits behind a gated,
+relationship-based channel. Layers 1–2 are the public site; Layer 3 is the
+gate.
+
+### 8.2 Layer 3 is the issuer's responsibility, at the issuer's exemption
+
+The discovery document (`rwa.api`, §4) and everything it points to — offering
+memoranda, appraisals, NAV endpoints, subscription materials — are **issuer
+content governed by the issuer's chosen exemption**, not by this spec. The spec
+specifies only *where* the pointer lives and *how* its integrity is proven
+(§4.1); it says nothing about who may read the content behind it, and it must
+not be read as permission to serve offering material to the public.
+
+An issuer relying on Rule 506(b) SHOULD ensure that offering material behind
+`rwa.api` is not accessible to persons with whom the issuer lacks a
+pre-existing, substantive relationship, and that the publicly fetchable
+discovery document itself (the `.well-known/rwa/<mint>.json` and its endpoint
+*names*) carries no offering terms. Gating the *content* while leaving the
+*pointer* public is consistent with the spec: the pointer is classification
+infrastructure; the content is the offering.
+
+An issuer relying on Rule 506(c), which permits general solicitation to
+verified accredited investors, has more latitude in what Layer 3 may expose,
+but assumes the corresponding obligation to take reasonable steps to verify
+accredited status before sale. Note that the attestation primitive this spec
+builds on (§3) is the same class of mechanism that the SEC staff has
+recognized may be used to obtain and evidence the accredited-investor and
+non-financing representations that support the streamlined 506(c) verification
+approach — though this spec's `rwa.classification.v1` schema is not itself an
+eligibility attestation and MUST NOT be repurposed as one. Eligibility and
+identity are SAS's domain and the token's own transfer logic (sRFC 00020), not
+this classification schema.
+
+### 8.3 The standard is exemption-neutral by construction
+
+This document takes no position on which exemption an issuer uses, or on
+whether a given token is even offered in the United States. That neutrality is
+intentional and is the reason `rwa.jurisdiction` is a hint for consumers rather
+than a control, and the reason no field encodes offering status. A consumer
+MUST NOT infer from the presence of conforming metadata that a token is being
+lawfully offered in the consumer's jurisdiction, that it is available for
+purchase, or that any exemption is available to the reader — the metadata
+describes the instrument, not the reader's ability to acquire it.
+
+### 8.4 Summary of issuer obligations
+
+An issuer publishing conforming metadata for a security:
+
+- MUST NOT place price, availability, minimum investment, projected or
+  historical return, valuation, or any offering term in any Layer 1 or Layer 2
+  field, or in the publicly fetchable body of the Layer 3 discovery document.
+- MUST treat Layer 3 offering content as governed by its own exemption, and
+  gate access to it accordingly — for a 506(b) offering, behind a
+  pre-existing substantive relationship; for a 506(c) offering, subject to
+  accredited-investor verification before sale.
+- MUST NOT rely on this spec, or on the discoverability it enables, as a
+  substitute for its own exemption analysis or counsel's approval.
+- SHOULD keep the classification attestation (`rwa.classification.v1`)
+  distinct from any eligibility, identity, or accreditation attestation; the
+  former describes the asset, the latter gate the holder.
+
+These obligations run to the issuer. A conforming *consumer* incurs none of
+them by reading, deriving, or displaying classification data — reading a
+description of an instrument is not participation in its offering.
+
+## 9. Governance
 
 The author issues tokens in this category, which is a conflict worth stating
 plainly: a classification standard authored solely by an issuer invites the
@@ -478,7 +708,7 @@ Adoption bar before anyone should treat this as a standard:
 
 Below that bar this is a blog post with a table in it.
 
-## 9. Open questions
+## 10. Open questions
 
 1. ~~SAS field encoding.~~ **Resolved** in §3.1 and verified on devnet (§3.6).
 2. Should `rwa.claim` be multi-valued for hybrid instruments (converts,
@@ -494,7 +724,7 @@ Below that bar this is a blog post with a table in it.
 5. Is `rwa.jurisdiction` a single value in practice? Cross-border SPV structures
    may need a list.
 
-## 10. Prior art
+## 11. Prior art
 
 - **sRFC 00020** — permissioning and compliance mechanics; complementary.
 - **ERC-3643 (T-REX) / ONCHAINID** — the closest analogue. Its signed claim
@@ -510,7 +740,7 @@ Below that bar this is a blog post with a table in it.
   This proposal's Layer 3 is that pattern plus the two things it lacks: payload
   signing and hash pinning.
 
-## 11. Reference implementation
+## 12. Reference implementation
 
 [`src/rwa-classification.ts`](https://github.com/pzupan/rwa-classification/blob/main/src/rwa-classification.ts) — a dependency-free parser,
 validator, and trust resolver. Pure functions over already-fetched RPC data; no
@@ -531,4 +761,10 @@ The seam between them — decoded payload plus the account's native fields, in,
 `npm test` runs the offline suites on `node:test` with native TypeScript
 stripping — no test runner dependency, so the module's dependency-free claim
 survives contact with its own test suite. A CLI validator (adoption bar item 1,
-§8) does not exist yet.
+§9) does not exist yet.
+
+The resolver covers `rwa.classification.v1` and the §4 discovery document. It
+does not yet resolve issuer standing (§3.8) or LEI bindings (§3.9): a consumer
+using it today trusts classification credentials directly. Both schemas are
+implemented on the writing side by ioniqx's platform, which is how their
+layouts were exercised, but there is no independent reader for them yet.

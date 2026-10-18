@@ -50,13 +50,21 @@ to this proposal:
 specifically from the Foundation RWA group, Metaplex, and at least one competing
 issuer. I issue tokens in this category, and a classification standard authored
 solely by an issuer invites the reading that it is a distribution land grab. That
-is also why §3.7 refuses to name trusted attesters and why the adoption bar in §8
+is also why §3.7 refuses to name trusted attesters and why the adoption bar in §9
 is set where it is.
 
 Open questions I would most like comment on: whether `rwa.claim` should be
-multi-valued for hybrid instruments (§9.2), who maintains the subclass and
-namespace registries long-term (§9.3), and whether `rwa.jurisdiction` needs to
-be a list for cross-border SPV structures (§9.5).
+multi-valued for hybrid instruments (§10.2), who maintains the subclass and
+namespace registries long-term (§10.3), and whether `rwa.jurisdiction` needs to
+be a list for cross-border SPV structures (§10.5).
+
+**Revised 2026-10-09**, after building against the draft in a production
+tokenization platform. New: issuer-standing (§3.8) and LEI-binding (§3.9)
+schemas. Changed: discovery documents are per mint (§4), renewal is a
+close-and-create that log indexers must not read as revocation (§3.4), and
+self-attestation detection is qualified for platforms that hold mint keys in
+custody (§3.5). Securities-law considerations are now §8, so Governance, Open
+questions, Prior art, and Reference implementation move to §9–§12.
 
 ---
 
